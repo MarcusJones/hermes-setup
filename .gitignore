@@ -1,0 +1,32 @@
+.screenshots
+
+# env
+**/.env
+**/.env.*
+
+# dependencies
+node_modules/
+.pnpm-store/
+
+# SST
+.sst/
+
+# Next.js
+.next/
+out/
+
+# build / cache
+dist/
+*.tsbuildinfo
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+
+# Claude
+.claude/
+.claude

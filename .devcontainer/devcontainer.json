@@ -1,0 +1,38 @@
+{
+  "name": "Your project name here!",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "devcontainer",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg",
+        "ms-azuretools.vscode-docker",
+        "anthropic.claude-code"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.codeActionsOnSave": {
+          "source.fixAll.eslint": "explicit"
+        },
+        "workbench.colorCustomizations": {
+          "titleBar.activeBackground": "#3178C6",
+          "titleBar.activeForeground": "#ffffff",
+          "activityBar.background": "#23587A",
+          "statusBar.background": "#000000",
+          "statusBar.foreground": "#3178C6",
+          "tab.activeBackground": "#3178C6"
+        }
+      }
+    }
+  },
+  "postCreateCommand": "pnpm install",
+  "postStartCommand": "bash .devcontainer/post-start.sh ${containerWorkspaceFolder}",
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true
+}

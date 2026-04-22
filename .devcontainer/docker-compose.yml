@@ -1,0 +1,17 @@
+services:
+  devcontainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Mount the actual project!
+      # YOU NEED TO RENAME THIS!
+      - ..:/workspaces/hermes-setup:cached
+      # Mount the entire agentic-central repo for easy access to tools, scripts, and other resources.
+      # Host path comes from .devcontainer/.env (gitignored, per-user)
+      - ${AGENTIC_CENTRAL_PATH:?AGENTIC_CENTRAL_PATH is not set. Copy .devcontainer/.env.example to .devcontainer/.env and set the host path.}:/agentic-central:cached      # Fails loudly if unset or empty — copy .env.example and set your username
+      # ${WINDOWS_USER} comes from .devcontainer/.env (gitignored, per-user)
+      - /mnt/c/Users/${WINDOWS_USER:?WINDOWS_USER is not set. Copy .devcontainer/.env.example to .devcontainer/.env and set your Windows username.}/Pictures/Screenshots:/screenshots:cached
+    env_file:
+      - ${AGENTIC_CENTRAL_PATH}/.env
+    command: sleep infinity

@@ -1,0 +1,19 @@
+{
+  "name": "hermes-infra",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "sst deploy --stage dev",
+    "deploy:prod": "sst deploy --stage production",
+    "destroy": "sst remove --stage dev",
+    "dev": "sst dev",
+    "console": "sst console"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "sst": "^3.3.0",
+    "typescript": "^5.5.0"
+  },
+  "workspaces": ["web"]
+}
