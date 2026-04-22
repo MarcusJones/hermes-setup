@@ -4,7 +4,7 @@
  */
 
 export const sg = new aws.ec2.SecurityGroup("hermes-sg", {
-  description: "Hermes Agent — SSH open, key-pair auth only",
+  description: "Hermes Agent - SSH open, key-pair auth only",
   ingress: [
     {
       protocol: "tcp",

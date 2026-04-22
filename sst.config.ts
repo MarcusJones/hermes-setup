@@ -32,9 +32,8 @@ export default $config({
       publicIp: instance.publicIp,
       instanceId: instance.instanceId,
       sshCommand: instance.sshCommand,
+      instanceProfileName: instance.instanceProfileName,
       dashboardUrl: web.url,
-      snapshotPolicyId: backup.policyId,
-      securityGroupId: network.sgId,
     };
   },
 });

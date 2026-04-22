@@ -84,6 +84,31 @@ new aws.ec2.EipAssociation("hermes-eip-assoc", {
   allocationId: eip.id,
 });
 
+// IAM role so the instance can register with SSM and ship CloudWatch metrics.
+const ssmRole = new aws.iam.Role("hermes-ssm-role", {
+  assumeRolePolicy: JSON.stringify({
+    Version: "2012-10-17",
+    Statement: [{ Effect: "Allow", Principal: { Service: "ec2.amazonaws.com" }, Action: "sts:AssumeRole" }],
+  }),
+  tags: { Project: "hermes" },
+});
+
+new aws.iam.RolePolicyAttachment("hermes-ssm-policy", {
+  role: ssmRole.name,
+  policyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+});
+
+new aws.iam.RolePolicyAttachment("hermes-cw-policy", {
+  role: ssmRole.name,
+  policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+});
+
+const instanceProfile = new aws.iam.InstanceProfile("hermes-instance-profile", {
+  role: ssmRole.name,
+  tags: { Project: "hermes" },
+});
+
 export const publicIp = eip.publicIp;
+export const instanceProfileName = instanceProfile.name;
 export const instanceId = spot.spotInstanceId;
 export const sshCommand = $interpolate`ssh -i ~/.ssh/${keyName}.pem hermes@${eip.publicIp}`;

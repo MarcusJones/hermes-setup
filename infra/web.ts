@@ -12,9 +12,18 @@ import { publicIp, instanceId } from "./instance";
  */
 export const web = new sst.aws.Nextjs("HermesDashboard", {
   path: "web",
+  domain: {
+    name: "hermes.ic-ces.engineering",
+    dns: sst.aws.dns(),
+  },
   environment: {
     HERMES_INSTANCE_ID: instanceId,
     HERMES_PUBLIC_IP: publicIp,
+    AUTH_TRUST_HOST: "true",
+    AUTH_SECRET: process.env.AUTH_SECRET ?? "",
+    AUTH_GOOGLE_ID: process.env.AUTH_GOOGLE_ID ?? "",
+    AUTH_GOOGLE_SECRET: process.env.AUTH_GOOGLE_SECRET ?? "",
+    AUTH_ALLOWED_EMAIL: process.env.AUTH_ALLOWED_EMAIL ?? "",
   },
   permissions: [
     {
@@ -23,6 +32,11 @@ export const web = new sst.aws.Nextjs("HermesDashboard", {
         "ec2:DescribeAddresses",
         "ec2:DescribeSpotInstanceRequests",
         "ec2:AssociateAddress",
+        "cloudwatch:GetMetricStatistics",
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ce:GetCostAndUsage",
       ],
       resources: ["*"],
     },

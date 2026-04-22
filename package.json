@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "deploy": "sst deploy --stage dev",
-    "deploy:prod": "sst deploy --stage production",
+    "deploy": "sst deploy --stage dev && bash scripts/remind-profile.sh",
+    "deploy:prod": "sst deploy --stage production && bash scripts/remind-profile.sh",
     "destroy": "sst remove --stage dev",
     "dev": "sst dev",
     "console": "sst console"
