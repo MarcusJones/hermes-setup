@@ -9,7 +9,7 @@ exec > >(tee /var/log/user-data.log) 2>&1
 
 # ---- Base system ----
 apt-get update
-apt-get -y install curl git build-essential ca-certificates ufw unattended-upgrades
+apt-get -y install curl git build-essential ca-certificates ufw unattended-upgrades syncthing
 
 # ---- 4 GB swap (safety net for parallel CC subagents on 4 GB RAM) ----
 if ! swapon --show | grep -q .; then
@@ -42,6 +42,9 @@ fi
 
 # Keeps hermes's systemd user services alive after SSH logout.
 loginctl enable-linger hermes
+
+# ---- Syncthing as a hermes user service ----
+sudo -iu hermes bash -lc 'systemctl --user enable --now syncthing'
 
 # ---- Install Hermes Agent (non-interactive core install) ----
 sudo -iu hermes bash -lc '
