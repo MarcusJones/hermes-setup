@@ -28,11 +28,11 @@ are the safety net.
 
 ### Day 1 — you + partner
 
-| Context | Participants | Bot | Scope |
-|---|---|---|---|
-| Your DM | you | your bot | full vault + all tools |
-| Her DM | her | her bot | `/vaults/shared/` only, notes-only |
-| Group chat | you + her + her bot | her bot | `/vaults/shared/` only |
+| Context    | Participants        | Bot      | Scope                              |
+| ---------- | ------------------- | -------- | ---------------------------------- |
+| Your DM    | you                 | your bot | full vault + all tools             |
+| Her DM     | her                 | her bot  | `/vaults/shared/` only, notes-only |
+| Group chat | you + her + her bot | her bot  | `/vaults/shared/` only             |
 
 Concrete things this unlocks immediately:
 
@@ -114,7 +114,9 @@ AWS Backup snapshots, 4 GB swap).
 ### 4.1 Pre-flight — back up before touching persistent state
 
 ```bash
+# snapshot the entire vault to a timestamped tarball before we touch anything
 sudo tar czf /tmp/vault-pre-multiuser-$(date +%F).tgz /home/hermes/vaults
+# push it to S3 as a manual out-of-band backup (separate from the nightly AWS Backup snapshots)
 aws s3 cp /tmp/vault-pre-multiuser-*.tgz s3://<your-backup-bucket>/
 # or trigger an on-demand AWS Backup recovery point via the console
 ```
@@ -125,20 +127,21 @@ systemd state is flagged **⚠ persistent**.
 ### 4.2 Carve out the shared vault subtree — ⚠ persistent
 
 ```bash
-sudo groupadd vault-shared
-sudo usermod -aG vault-shared hermes
-sudo apt install -y acl
+sudo groupadd vault-shared                          # new OS group — membership = read/write on shared/
+sudo usermod -aG vault-shared hermes               # add hermes to her own group so she can write shared files
+sudo apt install -y acl                             # needed for setfacl commands below
 
 sudo -u hermes mkdir -p /home/hermes/vaults/shared /home/hermes/vaults/private
 # move any existing notes you want shared into shared/, everything else into private/
 
-sudo chown -R hermes:vault-shared /home/hermes/vaults/shared
-sudo chmod -R 2770 /home/hermes/vaults/shared              # 2 = setgid
-sudo setfacl -R -d -m g:vault-shared:rwX /home/hermes/vaults/shared
-sudo setfacl -R    -m g:vault-shared:rwX /home/hermes/vaults/shared
+sudo chown -R hermes:vault-shared /home/hermes/vaults/shared      # group owns shared/ (not root)
+sudo chmod -R 2770 /home/hermes/vaults/shared      # 2=setgid so new files inherit vault-shared group; 770=owner+group rwx, others nothing
+sudo setfacl -R -d -m g:vault-shared:rwX /home/hermes/vaults/shared   # default ACL: files created here automatically get group rw
+sudo setfacl -R    -m g:vault-shared:rwX /home/hermes/vaults/shared   # apply the same ACL to files that already exist
 
-sudo chmod 0700 /home/hermes/vaults/private
-sudo chmod 0711 /home/hermes/vaults                        # others: traverse only
+sudo chmod 0700 /home/hermes/vaults/private        # only the hermes user can enter private/
+sudo chmod 0711 /home/hermes/vaults                # others can traverse (cd) into vaults/ but cannot list it
+sudo chmod 0711 /home/hermes                       # Ubuntu sets home dirs to 750 by default — others need execute to traverse into it
 ```
 
 ### 4.3 Create her user — ⚠ persistent
@@ -146,70 +149,130 @@ sudo chmod 0711 /home/hermes/vaults                        # others: traverse on
 Telegram-only access means no SSH, no password, no shell login:
 
 ```bash
-sudo adduser --disabled-password --gecos "" alice
-sudo usermod -aG vault-shared alice
-sudo loginctl enable-linger alice                         # ⚠ /var/lib/systemd/linger/alice
+sudo adduser --disabled-password --gecos "" alice   # create the account: no password = no SSH login, no GECOS = no name/phone prompts
+sudo usermod -aG vault-shared alice                 # give her read/write on /vaults/shared/
+sudo loginctl enable-linger alice                   # keep her systemd session alive after she logs out, so her bot stays running — ⚠ /var/lib/systemd/linger/alice
 ```
 
 ### 4.4 Install her Hermes
 
-Become her without needing a password:
+Open a shell as alice without needing her password:
 
 ```bash
-sudo machinectl shell alice@
+sudo apt install -y systemd-container   # provides machinectl; not installed by default on Ubuntu
+sudo machinectl shell alice@            # drops you into alice's shell with her environment and home dir
 ```
 
-Inside her shell, install Hermes the same way you installed yours. Then:
+#### Install the Hermes binary
+
+Same install script as your own user — puts the `hermes` binary in `~/.local/bin/`:
 
 ```bash
-hermes setup       # her API keys — use her own OpenRouter/Anthropic keys for cost attribution
-hermes model       # pick a cheap 64k+ model (Gemini Flash 2.0 on OpenRouter is ideal)
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+source ~/.bashrc    # reload PATH so hermes is immediately available
+hermes --version    # confirm it installed
 ```
 
-Write `/home/alice/.hermes/config.yaml`:
+**Do not** run `npm install -g @anthropic-ai/claude-code` here. If `which claude`
+returns nothing in alice's shell, the delegation system has no binary to invoke
+even if the config ever re-enables it — that's the intent.
 
-```yaml
-mcp_servers:
-  vault:
-    command: "uvx"
-    args: ["markdown-vault-mcp", "serve", "--transport", "stdio"]
-    env:
-      MARKDOWN_VAULT_MCP_SOURCE_DIR: "/home/hermes/vaults/shared"
-      MARKDOWN_VAULT_MCP_INDEX_PATH: "/home/alice/.cache/mdvault/index.sqlite"
-      MARKDOWN_VAULT_MCP_EXCLUDE: ".obsidian/**,.trash/**,.stversions/**"
-    timeout: 120
+#### Install uv (required for the vault MCP server)
 
-delegation:
-  enabled: false
+The vault MCP server (`markdown-vault-mcp`) runs via `uvx`, which ships with `uv`.
+Install it for alice's user:
 
-tools:
-  terminal: { enabled: false }
-  shell:    { enabled: false }
-
-telegram:
-  token: <HER_BOT_TOKEN>
-  allowed_users: "<HER_TG_ID>,<YOUR_TG_ID>"
-  allowed_chats: "<HER_DM_CHAT_ID>,<SHARED_GROUP_CHAT_ID>"
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # installs uv + uvx to ~/.local/bin/
+source ~/.bashrc                                    # add ~/.local/bin to PATH
+uvx --version                                       # expect something like uv 0.x.y
 ```
 
-Run `hermes config show | grep -iE 'tool|delegat|chat'` to verify the exact
-key names match your Hermes version.
+#### Configure API keys and pick a model
 
-**Do not** run `claude mcp add -s user hermes …` as alice. Extra belt-and-braces:
-don't install `@anthropic-ai/claude-code` under her user — if `which claude` is
-empty in her shell, `delegate_task` has no worker binary to invoke even if it
-ever re-enables itself.
+```bash
+hermes setup   # interactive prompt — enter her API key; use a separate key from yours for per-user billing
+hermes model   # pick a cheap model: google/gemini-2.0-flash on OpenRouter is a good default (large context, low cost)
+```
+
+#### Write her config
+
+The full config is at [`docs/alice-config.yaml`](alice-config.yaml) — annotated and based on the real Hermes config structure. Deploy it:
+
+```bash
+mkdir -p ~/.hermes ~/.cache/mdvault
+cp /workspaces/hermes-setup/docs/alice-config.yaml ~/.hermes/config.yaml
+```
+
+Then create `~/.hermes/.env` with her three secrets (token and API keys are env vars, not in config.yaml):
+
+```bash
+cat > ~/.hermes/.env << 'EOF'
+TELEGRAM_BOT_TOKEN=<token from @BotFather — do step 4.6 first>
+TELEGRAM_ALLOWED_USERS=<her_tg_id>,<your_tg_id>
+OPENROUTER_API_KEY=<her_openrouter_key>
+EOF
+chmod 600 ~/.hermes/.env   # readable by alice only
+```
+
+Verify Hermes picks it up:
+
+```bash
+hermes config show | grep -iE 'toolset|delegat|telegram|model'
+```
+
+When done, exit back to your own user:
+
+```bash
+exit   # leave alice's machinectl shell, return to hermes
+```
 
 ### 4.5 Her systemd user service — ⚠ persistent
 
-Copy your `~/.config/systemd/user/hermes-gateway.service` into
-`~alice/.config/systemd/user/hermes-gateway.service`, then:
+The Hermes install created a service file at `~/.config/systemd/user/hermes-gateway.service` under your (`hermes`) user. Alice needs the same file under her own user — systemd user services are per-user, so you can't share one.
+
+Do this **as hermes** (not inside alice's shell):
 
 ```bash
-sudo machinectl shell alice@
-systemctl --user daemon-reload
-systemctl --user enable --now hermes-gateway
-journalctl --user -u hermes-gateway -f      # sanity-check it starts cleanly
+# create the systemd user service directory for alice
+sudo mkdir -p /home/alice/.config/systemd/user
+
+# copy your service file into it
+sudo cp ~/.config/systemd/user/hermes-gateway.service \
+        /home/alice/.config/systemd/user/hermes-gateway.service
+
+# IMPORTANT: the service file contains hardcoded paths to /home/hermes/.hermes/
+# Replace them with alice's own install path — otherwise the service fails with status=203/EXEC
+sudo sed -i 's|/home/hermes/.hermes|/home/alice/.hermes|g' \
+        /home/alice/.config/systemd/user/hermes-gateway.service
+
+# confirm the ExecStart line now points at alice's install
+sudo grep ExecStart /home/alice/.config/systemd/user/hermes-gateway.service
+
+# fix ownership — alice's systemd won't load files it doesn't own
+sudo chown -R alice:alice /home/alice/.config
+```
+
+Quick sanity check before continuing — confirm the file landed and looks right:
+
+```bash
+sudo cat /home/alice/.config/systemd/user/hermes-gateway.service
+```
+
+Now enter alice's shell and start the service:
+
+```bash
+sudo machinectl shell alice@               # open a shell as alice
+systemctl --user daemon-reload             # tell systemd to scan for the new service file
+systemctl --user enable --now hermes-gateway   # start it now and auto-start on every boot
+journalctl --user -u hermes-gateway -f     # tail logs — wait for a "listening" or "connected" line, then Ctrl+C
+```
+
+Confirm it's running:
+
+```bash
+systemctl --user status hermes-gateway    # should show: active (running)
+exit                                       # back to hermes
 ```
 
 ### 4.6 Create her Telegram bot
@@ -228,8 +291,8 @@ Plug those into the config in 4.4 and restart her gateway.
 
 ```bash
 # as hermes (you)
-hermes config set telegram.allowed_users "<YOUR_TG_ID>"
-systemctl --user restart hermes-gateway
+hermes config set telegram.allowed_users "<YOUR_TG_ID>"   # whitelist only your Telegram numeric ID — her ID is not in this list
+systemctl --user restart hermes-gateway                    # reload config; bot won't respect the change until restarted
 ```
 
 ### 4.8 Add a skill for group-chat etiquette
@@ -256,20 +319,78 @@ bot's behaviour in the group without code changes.
 
 ### 4.9 Verify
 
-```bash
-# from your user
-sudo -u alice ls /home/hermes/vaults/private     # Permission denied  ✓
-sudo -u alice ls /home/hermes/vaults/shared      # lists shared files ✓
-sudo -u alice touch /home/hermes/vaults/shared/_test.md
-ls -l /home/hermes/vaults/shared/_test.md        # group: vault-shared ✓
-rm /home/hermes/vaults/shared/_test.md
+Work through these in order. Fix any failure before moving to the next block — Telegram tests are last because they depend on everything below being correct.
 
-# from Telegram
-# - DM your bot → responds
-# - DM her bot → responds
-# - Group chat, @-mention her bot → responds
-# - Her bot, ask "read /home/hermes/vaults/private/..." → refuses / can't see it
+#### Users and groups
+
+```bash
+# run as hermes
+id alice | grep vault-shared          # must show vault-shared in the groups list  ✓
+getent group vault-shared             # shows: vault-shared:x:NNNN:hermes,alice    ✓
 ```
+
+#### Filesystem permissions
+
+```bash
+# confirm hermes home is traversable by others (750 breaks everything)
+stat -c "%a %U %G %n" /home/hermes   # must show 711 hermes hermes               ✓
+
+# confirm alice cannot list the vault root (0711 = traverse only for others)
+sudo -u alice ls /home/hermes/vaults             # must fail: Permission denied    ✓
+
+# confirm alice cannot enter private/
+sudo -u alice ls /home/hermes/vaults/private     # must fail: Permission denied    ✓
+
+# confirm alice can enter and write shared/
+sudo -u alice ls /home/hermes/vaults/shared      # must succeed: lists files       ✓
+sudo -u alice touch /home/hermes/vaults/shared/_test.md
+ls -l /home/hermes/vaults/shared/_test.md        # group column must say vault-shared (setgid working) ✓
+rm /home/hermes/vaults/shared/_test.md
+```
+
+#### Alice's Hermes service
+
+```bash
+# confirm the service is running
+sudo -u alice XDG_RUNTIME_DIR=/run/user/$(id -u alice) systemctl --user status hermes-gateway
+# must show: active (running)                                                      ✓
+
+# confirm the process is running as alice (not root, not hermes)
+ps aux | grep hermes-gateway | grep -v grep      # user column must say alice      ✓
+
+# tail logs for startup errors
+sudo machinectl shell alice@
+journalctl --user -u hermes-gateway --since "5 minutes ago" | grep -iE 'error|warn|fail|vault|telegram'
+exit
+```
+
+#### Config and secrets
+
+```bash
+sudo machinectl shell alice@
+
+# confirm secrets are loaded
+hermes config show | grep -i telegram            # token line must be non-empty    ✓
+
+# confirm MCP vault server is wired up
+hermes config show | grep -i mcp                 # should show vault entry         ✓
+
+# confirm delegation is off
+hermes config show | grep -i delegation          # enabled: false                  ✓
+
+# confirm toolset is telegram-only
+hermes config show | grep -i toolset             # hermes-telegram, not hermes-cli ✓
+
+exit
+```
+
+#### Telegram (only once all above pass)
+
+- DM your bot → responds
+- DM her bot → responds
+- Her bot: ask *"what files are in the vault?"* → lists shared/ contents, no errors
+- Her bot: ask *"read /home/hermes/vaults/private"* → refuses or says it has no access
+- Group chat, @-mention her bot → responds
 
 ---
 
@@ -279,15 +400,15 @@ rm /home/hermes/vaults/shared/_test.md
 
 Hermes has three memory layers. Understand which is which:
 
-| Layer | Path | What it holds | Lifetime |
-|---|---|---|---|
-| Conversation history | `~/.hermes/sessions/` | Per-chat transcripts, short-term working memory | Per-session, until compaction |
-| Skills | `~/.hermes/skills/*.md` | Procedural memory — "how to do X" | Permanent until you delete |
-| Vault | `/home/hermes/vaults/` | Durable facts, notes, decisions | Permanent, git-versioned |
+| Layer                | Path                    | What it holds                                   | Lifetime                      |
+| -------------------- | ----------------------- | ----------------------------------------------- | ----------------------------- |
+| Conversation history | `~/.hermes/sessions/`   | Per-chat transcripts, short-term working memory | Per-session, until compaction |
+| Skills               | `~/.hermes/skills/*.md` | Procedural memory — "how to do X"               | Permanent until you delete    |
+| Vault                | `/home/hermes/vaults/`  | Durable facts, notes, decisions                 | Permanent, git-versioned      |
 
 **Rule of thumb**: if a fact matters beyond one conversation, it goes in the
-vault. Skills are for *patterns* ("how to add a grocery item"), vault is for
-*content* ("we're going to Kyoto April 12"). Don't let important facts live only
+vault. Skills are for _patterns_ ("how to add a grocery item"), vault is for
+_content_ ("we're going to Kyoto April 12"). Don't let important facts live only
 in session history — sessions get compacted and details drop.
 
 Her instance has its own `~/.hermes/` entirely separate from yours — no shared
@@ -312,13 +433,16 @@ change retention.
 
 ### 5.3 When things go wrong
 
-| Symptom | Check |
-|---|---|
-| Bot silent in group | `journalctl --user -u hermes-gateway -f` (as alice), look for Telegram auth errors |
-| "Permission denied" on vault writes | `id alice` — is she in `vault-shared`? Did she re-login after usermod? |
-| Hermes OOM'd during CC fanout | `dmesg \| grep -i killed`, reduce concurrent CC subagents, check swap usage |
+| Symptom                              | Check                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| Bot silent in group                  | `journalctl --user -u hermes-gateway -f` (as alice), look for Telegram auth errors         |
+| "Permission denied" on vault writes  | `id alice` — is she in `vault-shared`? Did she re-login after usermod?                     |
+| MCP can't access vault (bot reports permission error after group was added) | Gateway process inherited stale groups at launch — `sudo machinectl shell alice@` then `systemctl --user restart hermes-gateway` |
+| Bot using terminal tool when it shouldn't | `toolsets` config didn't fully lock it — `sudo machinectl shell alice@` then `hermes tools disable terminal && hermes tools disable shell && systemctl --user restart hermes-gateway` |
+| Bot suggests wrong restart command (`sudo systemctl restart hermes`) | Add `~/.hermes/skills/self-awareness.md` telling it its actual service name and that it has no sudo |
+| Hermes OOM'd during CC fanout        | `dmesg \| grep -i killed`, reduce concurrent CC subagents, check swap usage                |
 | Instance stopped (spot interruption) | AWS console → start → re-associate Elastic IP → both systemd services come back via linger |
-| Vault file conflicts (Syncthing) | `.sync-conflict-*` files in the vault — resolve manually, Hermes doesn't touch them |
+| Vault file conflicts (Syncthing)     | `.sync-conflict-*` files in the vault — resolve manually, Hermes doesn't touch them        |
 
 ---
 
@@ -403,15 +527,15 @@ profiles — put a `greece-trip.md` skill that restricts the MCP to
 Everything that persists across reboots / spot interruptions, in one place.
 Check this list any time something feels broken after a restart.
 
-| Change | Path | How to roll back |
-|---|---|---|
-| New user `alice` | `/etc/passwd`, `/home/alice/` | `userdel -r alice` |
-| Group memberships | `/etc/group` | `gpasswd -d <user> <group>` |
-| Vault perms + ACLs | `/home/hermes/vaults/*` | Restore from pre-change tarball |
-| Linger for alice | `/var/lib/systemd/linger/alice` | `loginctl disable-linger alice` |
-| Her systemd unit | `~alice/.config/systemd/user/` | Disable + remove |
-| Her `~/.hermes/` | `/home/alice/.hermes/` | Delete the directory |
-| Syncthing folders | hermes's Syncthing config | Remove folder in Syncthing UI |
+| Change             | Path                            | How to roll back                |
+| ------------------ | ------------------------------- | ------------------------------- |
+| New user `alice`   | `/etc/passwd`, `/home/alice/`   | `userdel -r alice`              |
+| Group memberships  | `/etc/group`                    | `gpasswd -d <user> <group>`     |
+| Vault perms + ACLs | `/home/hermes/vaults/*`         | Restore from pre-change tarball |
+| Linger for alice   | `/var/lib/systemd/linger/alice` | `loginctl disable-linger alice` |
+| Her systemd unit   | `~alice/.config/systemd/user/`  | Disable + remove                |
+| Her `~/.hermes/`   | `/home/alice/.hermes/`          | Delete the directory            |
+| Syncthing folders  | hermes's Syncthing config       | Remove folder in Syncthing UI   |
 
 The EBS volume has `DeleteOnTermination=false` and AWS Backup takes nightly
 snapshots with 7-day retention — so any of the above is recoverable within 24h
@@ -424,16 +548,16 @@ file-level undo on top of that.
 
 Steady-state for the two-user setup, monthly:
 
-| Line item | Cost |
-|---|---|
-| EC2 `t4g.medium` spot | ~$8 |
-| EBS 40 GB gp3 | ~$3 |
-| Elastic IP (attached) | $0 |
-| AWS Backup 7-day | ~$2 |
+| Line item                                        | Cost            |
+| ------------------------------------------------ | --------------- |
+| EC2 `t4g.medium` spot                            | ~$8             |
+| EBS 40 GB gp3                                    | ~$3             |
+| Elastic IP (attached)                            | $0              |
+| AWS Backup 7-day                                 | ~$2             |
 | Your API (orchestrator Gemini Flash + CC bursts) | $10–40 variable |
-| Her API (Gemini Flash, light usage) | $1–3 |
-| Her Telegram bot | $0 |
-| **Total baseline** | **~$25–60** |
+| Her API (Gemini Flash, light usage)              | $1–3            |
+| Her Telegram bot                                 | $0              |
+| **Total baseline**                               | **~$25–60**     |
 
 When scaling to more family members, the EC2/EBS numbers don't move until you
 cross ~4 concurrent active agents and upgrade to `t4g.large` (+$6/mo). API cost
@@ -450,7 +574,7 @@ means redesigning, not patching.
 1. **Vault is markdown + git**, never a proprietary store. The memory survives
    Hermes going away.
 2. **One human → one Linux user → one Hermes → one bot.** Shared scopes
-   happen in *group chats* and *vault subtrees*, not by having multiple
+   happen in _group chats_ and _vault subtrees_, not by having multiple
    humans share a single Hermes instance.
 3. **Scope is enforced at the OS + Telegram layer**, not by asking the LLM
    to behave. POSIX groups and `allowed_users` are the firewall; skills are
@@ -464,5 +588,5 @@ means redesigning, not patching.
 
 ---
 
-*This doc lives in the vault. Update it in place as the setup evolves — that's
-the whole point of file-based memory.*
+_This doc lives in the vault. Update it in place as the setup evolves — that's
+the whole point of file-based memory._

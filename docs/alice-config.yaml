@@ -1,0 +1,137 @@
+# Hermes config for alice — Telegram-only, vault notes scope, no shell/terminal/delegation.
+#
+# SECRETS go in ~/.hermes/.env (not here):
+#   TELEGRAM_BOT_TOKEN=<token from @BotFather>
+#   TELEGRAM_ALLOWED_USERS=<alice_tg_id>,<your_tg_id>   # numeric IDs, comma-separated
+#   OPENROUTER_API_KEY=<her_openrouter_key>              # separate key = separate billing
+#
+# Deploy:
+#   mkdir -p ~/.hermes && cp this file ~/.hermes/config.yaml
+#   nano ~/.hermes/.env   # fill in the three secrets above
+#   hermes gateway setup  # confirm telegram token is detected, skip other platforms
+
+_config_version: 22
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+# Gemini Flash: large context (1M tokens), fast, cheap. Good fit for vault queries.
+model:
+  default: google/gemini-2.0-flash
+  provider: openrouter
+  base_url: https://openrouter.ai/api/v1
+  api_mode: chat_completions
+
+providers: {}
+fallback_providers: []
+credential_pool_strategies: {}
+
+# ── Toolsets ───────────────────────────────────────────────────────────────────
+# hermes-telegram only — no terminal, no browser, no shell included in this bundle.
+toolsets:
+  - hermes-telegram
+
+platform_toolsets:
+  telegram:
+    - hermes-telegram
+
+# ── Agent behaviour ────────────────────────────────────────────────────────────
+agent:
+  max_turns: 20                   # vault reads/writes rarely need more than a few tool calls
+  gateway_timeout: 1800
+  restart_drain_timeout: 60
+  api_max_retries: 3
+  service_tier: ''
+  tool_use_enforcement: auto
+  gateway_timeout_warning: 900
+  gateway_notify_interval: 180
+  verbose: false
+  reasoning_effort: low           # simple notes tasks don't need heavy reasoning
+
+# ── Delegation — disabled ──────────────────────────────────────────────────────
+# Prevents alice's bot from spawning Claude Code subagents even if prompted.
+delegation:
+  enabled: false
+
+# ── MCP servers ───────────────────────────────────────────────────────────────
+# Scoped to /home/hermes/vaults/shared only — alice cannot see private/.
+# Uses alice's own FTS index so searches don't interfere with hermes's index.
+mcp_servers:
+  vault:
+    command: uvx
+    args:
+      - markdown-vault-mcp
+      - serve
+      - --transport
+      - stdio
+    env:
+      MARKDOWN_VAULT_MCP_SOURCE_DIR: /home/hermes/vaults/shared
+      MARKDOWN_VAULT_MCP_INDEX_PATH: /home/alice/.cache/mdvault/index.sqlite
+      MARKDOWN_VAULT_MCP_EXCLUDE: .obsidian/**,.trash/**,.stversions/**
+    timeout: 120
+
+# ── Telegram ───────────────────────────────────────────────────────────────────
+# Token and allowed_users are read from ~/.hermes/.env (see top of file).
+telegram:
+  channel_prompts: {}
+
+# ── Memory ────────────────────────────────────────────────────────────────────
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 2200
+  user_char_limit: 1375
+  nudge_interval: 10
+  flush_min_turns: 6
+
+# ── Context compression ───────────────────────────────────────────────────────
+context:
+  engine: compressor
+
+compression:
+  enabled: true
+  threshold: 0.5
+  target_ratio: 0.2
+  protect_last_n: 20
+
+# ── Tool output limits ────────────────────────────────────────────────────────
+file_read_max_chars: 100000
+tool_output:
+  max_bytes: 50000
+  max_lines: 2000
+  max_line_length: 2000
+
+# ── Sessions ──────────────────────────────────────────────────────────────────
+sessions:
+  auto_prune: false
+  retention_days: 90
+  vacuum_after_prune: true
+  min_interval_hours: 24
+
+session_reset:
+  mode: both
+  idle_minutes: 1440   # reset after 24h idle
+  at_hour: 4           # or at 4am regardless
+
+group_sessions_per_user: true
+
+# ── Security ──────────────────────────────────────────────────────────────────
+security:
+  allow_private_urls: false
+  redact_secrets: true
+  tirith_enabled: true
+  tirith_path: tirith
+  tirith_timeout: 5
+  tirith_fail_open: true
+
+approvals:
+  mode: manual
+  timeout: 60
+  cron_mode: deny
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  max_size_mb: 5
+  backup_count: 3
+
+streaming:
+  enabled: false
